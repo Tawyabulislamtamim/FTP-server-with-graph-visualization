@@ -1,0 +1,191 @@
+ My Project Idea:
+
+I want to develop a project for my final Computer Networking Lab. The initial concept is inspired by a typical FTP server, which supports functionalities like uploading and downloading files. My idea is somewhat similar, but with a unique twist.
+
+I plan to include a special feature: whenever a user uploads or downloads a file, we will track detailed network information such as:
+
+RTT (Round Trip Time)
+
+Timeout occurrences
+
+Packet loss events
+
+Congestion window (cwnd)
+
+Receiver window (rwnd)
+
+Other TCP congestion control variables
+
+Using these variables, we will generate dynamic visualizations such as:
+
+Transmission Round vs. Congestion Window (cwnd)
+
+TCP Tahoe and TCP Reno behavior
+
+Possibly even deep-level packet flow visualization from host to host
+
+These graphs will update automatically after each file transfer completes.
+
+✅ Key Features of the FTP System:
+User Registration & Login System
+
+User Interface (UI) with the following sections:
+
+Server View: Displays all files available on the server.
+
+Client Upload Section: Allows users to upload files from their local device.
+
+Graph Visualization Button: Opens a separate page with real-time network graphs based on the current transfer session.
+
+Transfer History Section: Displays the last 5–10 file transfer logs (with metrics like upload/download time, file size, etc.)
+
+Network Awareness: All transfers comply with TCP features like flow control, congestion control, and retransmissions.
+
+💡 Additional Suggestions:
+Real-time notifications on packet loss or retransmissions.
+
+Dark/light theme toggle for aesthetic UI.
+
+Admin dashboard to monitor all users and traffic.
+
+A download speed vs time graph or heatmap showing active users.
+
+🛠 Full Implementation Guide
+🔧 Tech Stack
+Layer	Technology Suggestion	Why
+Frontend	React (with Vite + TailwindCSS + shadcn/ui)	Lightweight, fast UI development
+Backend	Java (Spring Boot or plain socket programming if low-level control is required)	You already have Java code
+Real-time Graph Plotting	Python with Matplotlib/Plotly + WebSocket + Flask/Express as bridge	For real-time plotting of cwnd, RTT, etc.
+Database	MongoDB (or PostgreSQL if using SQL)	To store user info, transfer history, logs
+File Storage	Server filesystem (locally), or GridFS (MongoDB)	Depending on file size and access pattern
+Authentication	JWT (JSON Web Token) or Firebase Auth	Simple secure login
+
+
+ftp-network-visualizer/
+├── client/                   # Frontend React application
+│   ├── public/               # Static files
+│   ├── src/
+│   │   ├── assets/           # Images, fonts, etc.
+│   │   ├── components/       # Reusable UI components
+│   │   │   ├── auth/         # Login/registration components
+│   │   │   ├── dashboard/    # Main interface components
+│   │   │   ├── file-list/    # Server/client file browsers
+│   │   │   ├── graphs/       # Visualization components
+│   │   │   └── transfer/     # Transfer status components
+│   │   ├── pages/            # Main application pages
+│   │   │   ├── Dashboard.js  # Main interface
+│   │   │   ├── Graphs.js     # Visualization page
+│   │   │   └── History.js    # Transfer history
+│   │   ├── services/         # API service calls
+│   │   ├── store/            # State management (Redux)
+│   │   ├── styles/           # Global styles
+│   │   ├── utils/            # Utility functions
+│   │   ├── App.js            # Main App component
+│   │   └── index.js          # Entry point
+│   └── package.json
+│
+├── server/                   # Backend Node.js application
+│   ├── config/               # Configuration files
+│   ├── controllers/          # Route controllers
+│   │   ├── auth.controller.js
+│   │   ├── file.controller.js
+│   │   ├── graph.controller.js
+│   │   └── transfer.controller.js
+│   ├── middlewares/          # Custom middleware
+│   ├── models/               # Database models
+│   ├── routes/               # API routes
+│   ├── services/             # Business logic
+│   │   ├── network-monitor/  # TCP analysis
+│   │   ├── storage/          # File handling
+│   │   └── visualization/    # Graph data processing
+│   ├── utils/                # Utility functions
+│   ├── app.js                # Express app setup
+│   └── server.js             # Server entry point
+│
+├── scripts/                  # Utility scripts
+│   ├── database/             # DB migration/seeding
+│   └── network/              # Network test scripts
+│
+├── docs/                     # Documentation
+├── .env                      # Environment variables
+└── package.json              # Root project config
+
+Phase 1: Basic FTP Functionality
+Setup Project Structure
+
+Initialize both frontend and backend projects
+
+Configure basic routing
+
+User Authentication
+
+Implement registration/login system
+
+Set up JWT for session management
+
+File Transfer Core
+
+Create file listing endpoints
+
+Implement basic upload/download functionality
+
+Set up file storage system
+
+Phase 2: Network Monitoring
+Packet Capture Integration
+
+Implement TCP packet interception
+
+Extract key metrics (RTT, window sizes, etc.)
+
+Data Storage
+
+Design time-series database schema
+
+Implement real-time metric storage
+
+Transfer History
+
+Create database tables for transfer records
+
+Implement history retrieval endpoints
+
+Phase 3: Visualization
+Graph Components
+
+Design visualization layouts
+
+Implement dynamic chart rendering
+
+Real-time Updates
+
+Set up WebSocket connections
+
+Implement live data streaming to frontend
+
+TCP Algorithm Visualization
+
+Create animations for Tahoe/Reno behaviors
+
+Implement congestion window visualizations
+
+Phase 4: Advanced Features
+Comparative Analysis
+
+Allow side-by-side comparison of transfers
+
+Implement "replay" functionality for past transfers
+
+Network Simulation
+
+Add controls to simulate network conditions
+
+Implement packet loss/delay injection
+
+Export Functionality
+
+Allow exporting graph data as CSV/PNG
+
+Generate transfer reports
+
+
