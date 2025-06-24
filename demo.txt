@@ -1,0 +1,1643 @@
+return False
+
+# ============================================================================
+# File: app.py
+# ============================================================================
+app_py = """
+from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for
+from flask_socketio import SocketIO
+from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
+import os
+import logging
+from datetime import timedelta
+from config import Config
+from database import init_database
+from auth import init_jwt, authenticate_user, create_default_users, role_required
+from ftp_server import ftp_server
+from network_simulator import network_simulator
+from analytics import analytics
+from websocket_handler import init_websocket_handlers
+from utils import FileManager, allowed_# Complete FTP Server with TCP Analytics - Python Implementation
+# File Structure and Complete Code
+
+"""
+Project Structure:
+├── app.py                    # Main Flask application
+├── ftp_server.py            # FTP server implementation
+├── tcp_monitor.py           # TCP metrics collection
+├── analytics.py             # Data analysis service
+├── database.py              # Database operations
+├── auth.py                  # Authentication system
+├── websocket_handler.py     # Real-time communication
+├── network_simulator.py     # Network condition simulator
+├── config.py                # Configuration settings
+├── models.py                # Database models
+├── utils.py                 # Utility functions
+├── static/
+│   ├── js/
+│   │   ├── dashboard.js     # Frontend JavaScript
+│   │   └── charts.js        # Chart visualization
+│   ├── css/
+│   │   └── style.css        # Styling
+│   └── uploads/             # File upload directory
+├── templates/
+│   ├── index.html           # Login page
+│   ├── dashboard.html       # Main dashboard
+│   └── analytics.html       # Analytics view
+├── requirements.txt         # Python dependencies
+└── setup.py                # Installation script
+"""
+
+# ============================================================================
+# File: requirements.txt
+# ============================================================================
+requirements_txt = """
+Flask==2.3.3
+Flask-SocketIO==5.3.6
+Flask-JWT-Extended==4.5.3
+psycopg2-binary==2.9.7
+SQLAlchemy==2.0.23
+plotly==5.17.0
+pandas==2.1.3
+numpy==1.25.2
+paramiko==3.3.1
+pyftpdlib==1.5.9
+psutil==5.9.6
+scapy==2.5.0
+websocket-client==1.6.4
+python-dotenv==1.0.0
+bcrypt==4.1.1
+eventlet==0.33.3
+gunicorn==21.2.0
+"""
+
+# ============================================================================
+# File: config.py
+# ============================================================================
+config_py = """
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+class Config:
+    # Database Configuration
+    DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://postgres:password@localhost/ftp_analytics')
+    
+    # Flask Configuration
+    SECRET_KEY = os.getenv('SECRET_KEY', 'your-secret-key-here')
+    JWT_SECRET_KEY = os.getenv('JWT_SECRET_KEY', 'jwt-secret-string')
+    
+    # FTP Server Configuration
+    FTP_HOST = os.getenv('FTP_HOST', '0.0.0.0')
+    FTP_PORT = int(os.getenv('FTP_PORT', 2121))
+    FTP_USER = os.getenv('FTP_USER', 'admin')
+    FTP_PASSWORD = os.getenv('FTP_PASSWORD', 'netlab')
+    
+    # File Upload Configuration
+    UPLOAD_FOLDER = os.getenv('UPLOAD_FOLDER', 'static/uploads')
+    MAX_CONTENT_LENGTH = 100 * 1024 * 1024  # 100MB max file size
+    
+    # Analytics Configuration
+    ANALYTICS_UPDATE_INTERVAL = 0.5  # seconds
+    TCP_MONITOR_INTERFACE = os.getenv('TCP_MONITOR_INTERFACE', 'eth0')
+    
+    # Network Simulator Configuration
+    TC_ENABLED = os.getenv('TC_ENABLED', 'false').lower() == 'true'
+    
+    @staticmethod
+    def init_app(app):
+        pass
+
+class DevelopmentConfig(Config):
+    DEBUG = True
+
+class ProductionConfig(Config):
+    DEBUG = False
+
+config = {
+    'development': DevelopmentConfig,
+    'production': ProductionConfig,
+    'default': DevelopmentConfig
+}
+"""
+
+# ============================================================================
+# File: database.py
+# ============================================================================
+database_py = """
+from sqlalchemy import create_engine, text
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+from config import Config
+import logging
+
+logger = logging.getLogger(__name__)
+
+# Database setup
+engine = create_engine(Config.DATABASE_URL)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+def init_database():
+    \"\"\"Initialize database with required tables\"\"\"
+    try:
+        # Create tables
+        Base.metadata.create_all(bind=engine)
+        
+        # Create additional indexes for performance
+        with engine.connect() as conn:
+            conn.execute(text(\"\"\"
+                CREATE INDEX IF NOT EXISTS idx_tcp_metrics_timestamp 
+                ON tcp_metrics(timestamp);
+            \"\"\"))
+            
+            conn.execute(text(\"\"\"
+                CREATE INDEX IF NOT EXISTS idx_transfer_sessions_start_time 
+                ON transfer_sessions(start_time);
+            \"\"\"))
+            
+            conn.commit()
+            
+        logger.info("Database initialized successfully")
+        return True
+    except Exception as e:
+        logger.error(f"Database initialization failed: {e}")
+        return False
+
+def execute_sql_file(filepath):
+    \"\"\"Execute SQL commands from file\"\"\"
+    try:
+        with open(filepath, 'r') as file:
+            sql_commands = file.read()
+        
+        with engine.connect() as conn:
+            for command in sql_commands.split(';'):
+                if command.strip():
+                    conn.execute(text(command))
+            conn.commit()
+        
+        logger.info(f"SQL file {filepath} executed successfully")
+    except Exception as e:
+        logger.error(f"Failed to execute SQL file {filepath}: {e}")
+"""
+
+# ============================================================================
+# File: models.py
+# ============================================================================
+models_py = """
+from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, Text, ForeignKey, BigInteger
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import relationship
+from database import Base
+from datetime import datetime
+
+class User(Base):
+    __tablename__ = 'users'
+    
+    id = Column(Integer, primary_key=True)
+    username = Column(String(50), unique=True, nullable=False)
+    password_hash = Column(String(255), nullable=False)
+    email = Column(String(100))
+    created_at = Column(DateTime, default=datetime.utcnow)
+    is_active = Column(Boolean, default=True)
+    role = Column(String(20), default='student')  # student, professor, admin
+
+class TransferSession(Base):
+    __tablename__ = 'transfer_sessions'
+    
+    id = Column(Integer, primary_key=True)
+    user_id = Column(String(50), nullable=False)
+    session_uuid = Column(String(36), unique=True, nullable=False)
+    start_time = Column(DateTime, default=datetime.utcnow)
+    end_time = Column(DateTime)
+    file_name = Column(String(255), nullable=False)
+    file_size = Column(BigInteger, nullable=False)
+    transfer_type = Column(String(10), nullable=False)  # upload, download
+    tcp_variant = Column(String(20), default='cubic')
+    network_conditions = Column(JSONB)  # Store simulator settings
+    total_bytes_transferred = Column(BigInteger, default=0)
+    avg_throughput = Column(Float)
+    success = Column(Boolean, default=False)
+    error_message = Column(Text)
+    
+    # Relationships
+    tcp_metrics = relationship("TCPMetric", back_populates="session")
+    tcp_events = relationship("TCPEvent", back_populates="session")
+
+class TCPMetric(Base):
+    __tablename__ = 'tcp_metrics'
+    
+    id = Column(Integer, primary_key=True)
+    session_id = Column(Integer, ForeignKey('transfer_sessions.id'), nullable=False)
+    timestamp = Column(DateTime, default=datetime.utcnow)
+    cwnd = Column(Integer)  # Congestion window size
+    ssthresh = Column(Integer)  # Slow start threshold
+    rtt = Column(Float)  # Round trip time in ms
+    rto = Column(Float)  # Retransmission timeout
+    bytes_sent = Column(BigInteger, default=0)
+    bytes_received = Column(BigInteger, default=0)
+    packets_sent = Column(Integer, default=0)
+    packets_received = Column(Integer, default=0)
+    retransmissions = Column(Integer, default=0)
+    throughput = Column(Float)  # bytes per second
+    
+    # Relationships
+    session = relationship("TransferSession", back_populates="tcp_metrics")
+
+class TCPEvent(Base):
+    __tablename__ = 'tcp_events'
+    
+    id = Column(Integer, primary_key=True)
+    session_id = Column(Integer, ForeignKey('transfer_sessions.id'), nullable=False)
+    timestamp = Column(DateTime, default=datetime.utcnow)
+    event_type = Column(String(30), nullable=False)  # timeout, fast_retransmit, congestion
+    cwnd_before = Column(Integer)
+    cwnd_after = Column(Integer)
+    ssthresh_before = Column(Integer)
+    ssthresh_after = Column(Integer)
+    rtt_ms = Column(Float)
+    packet_loss_count = Column(Integer, default=0)
+    description = Column(Text)
+    
+    # Relationships
+    session = relationship("TransferSession", back_populates="tcp_events")
+
+class NetworkCondition(Base):
+    __tablename__ = 'network_conditions'
+    
+    id = Column(Integer, primary_key=True)
+    name = Column(String(50), unique=True, nullable=False)
+    description = Column(Text)
+    latency_ms = Column(Integer, default=0)
+    packet_loss_percent = Column(Float, default=0.0)
+    bandwidth_mbps = Column(Integer, default=100)
+    jitter_ms = Column(Integer, default=0)
+    is_preset = Column(Boolean, default=False)
+    created_by = Column(String(50))
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class LearningScenario(Base):
+    __tablename__ = 'learning_scenarios'
+    
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100), nullable=False)
+    description = Column(Text)
+    network_condition_id = Column(Integer, ForeignKey('network_conditions.id'))
+    tcp_variant = Column(String(20), default='cubic')
+    expected_behavior = Column(Text)
+    file_size_mb = Column(Integer, default=10)
+    instructions = Column(Text)
+    created_by = Column(String(50))
+    is_active = Column(Boolean, default=True)
+    
+    # Relationships
+    network_condition = relationship("NetworkCondition")
+"""
+
+# ============================================================================
+# File: auth.py
+# ============================================================================
+auth_py = """
+from functools import wraps
+from flask import request, jsonify, current_app
+from flask_jwt_extended import JWTManager, jwt_required, create_access_token, get_jwt_identity
+import bcrypt
+from models import User
+from database import SessionLocal
+import logging
+
+logger = logging.getLogger(__name__)
+
+def init_jwt(app):
+    jwt = JWTManager(app)
+    return jwt
+
+def hash_password(password):
+    \"\"\"Hash password using bcrypt\"\"\"
+    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
+def check_password(password, password_hash):
+    \"\"\"Check if password matches hash\"\"\"
+    return bcrypt.checkpw(password.encode('utf-8'), password_hash.encode('utf-8'))
+
+def authenticate_user(username, password):
+    \"\"\"Authenticate user credentials\"\"\"
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.username == username).first()
+        if user and user.is_active and check_password(password, user.password_hash):
+            return user
+        return None
+    finally:
+        db.close()
+
+def create_default_users():
+    \"\"\"Create default users for the system\"\"\"
+    db = SessionLocal()
+    try:
+        # Check if admin user exists
+        admin_user = db.query(User).filter(User.username == 'admin').first()
+        if not admin_user:
+            admin_user = User(
+                username='admin',
+                password_hash=hash_password('netlab'),
+                email='admin@example.com',
+                role='admin'
+            )
+            db.add(admin_user)
+        
+        # Create professor user
+        prof_user = db.query(User).filter(User.username == 'professor').first()
+        if not prof_user:
+            prof_user = User(
+                username='professor',
+                password_hash=hash_password('prof123'),
+                email='professor@example.com',
+                role='professor'
+            )
+            db.add(prof_user)
+        
+        # Create student user
+        student_user = db.query(User).filter(User.username == 'student').first()
+        if not student_user:
+            student_user = User(
+                username='student',
+                password_hash=hash_password('student123'),
+                email='student@example.com',
+                role='student'
+            )
+            db.add(student_user)
+        
+        db.commit()
+        logger.info("Default users created successfully")
+    except Exception as e:
+        logger.error(f"Failed to create default users: {e}")
+        db.rollback()
+    finally:
+        db.close()
+
+def role_required(required_role):
+    \"\"\"Decorator to check user role\"\"\"
+    def decorator(f):
+        @wraps(f)
+        @jwt_required()
+        def decorated_function(*args, **kwargs):
+            current_user_id = get_jwt_identity()
+            db = SessionLocal()
+            try:
+                user = db.query(User).filter(User.username == current_user_id).first()
+                if not user:
+                    return jsonify({'message': 'User not found'}), 404
+                
+                role_hierarchy = {'student': 1, 'professor': 2, 'admin': 3}
+                user_role_level = role_hierarchy.get(user.role, 0)
+                required_role_level = role_hierarchy.get(required_role, 0)
+                
+                if user_role_level < required_role_level:
+                    return jsonify({'message': 'Insufficient permissions'}), 403
+                
+                return f(*args, **kwargs)
+            finally:
+                db.close()
+        return decorated_function
+    return decorator
+"""
+
+# ============================================================================
+# File: tcp_monitor.py
+# ============================================================================
+tcp_monitor_py = """
+import psutil
+import time
+import threading
+import logging
+from datetime import datetime
+from models import TCPMetric, TCPEvent, TransferSession
+from database import SessionLocal
+import socket
+import struct
+import subprocess
+import re
+
+logger = logging.getLogger(__name__)
+
+class TCPMonitor:
+    def __init__(self):
+        self.monitoring = False
+        self.session_id = None
+        self.monitor_thread = None
+        self.last_stats = {}
+        
+    def start_monitoring(self, session_id):
+        \"\"\"Start monitoring TCP metrics for a session\"\"\"
+        self.session_id = session_id
+        self.monitoring = True
+        self.monitor_thread = threading.Thread(target=self._monitor_loop)
+        self.monitor_thread.daemon = True
+        self.monitor_thread.start()
+        logger.info(f"Started TCP monitoring for session {session_id}")
+    
+    def stop_monitoring(self):
+        \"\"\"Stop monitoring TCP metrics\"\"\"
+        self.monitoring = False
+        if self.monitor_thread:
+            self.monitor_thread.join()
+        logger.info(f"Stopped TCP monitoring for session {self.session_id}")
+    
+    def _monitor_loop(self):
+        \"\"\"Main monitoring loop\"\"\"
+        while self.monitoring:
+            try:
+                self._collect_tcp_metrics()
+                time.sleep(0.5)  # Collect metrics every 500ms
+            except Exception as e:
+                logger.error(f"Error in TCP monitoring loop: {e}")
+    
+    def _collect_tcp_metrics(self):
+        \"\"\"Collect TCP metrics from system\"\"\"
+        try:
+            # Get network statistics
+            net_stats = psutil.net_io_counters()
+            connections = psutil.net_connections(kind='tcp')
+            
+            # Get TCP socket information
+            tcp_info = self._get_tcp_socket_info()
+            
+            # Create TCP metric record
+            db = SessionLocal()
+            try:
+                metric = TCPMetric(
+                    session_id=self.session_id,
+                    timestamp=datetime.utcnow(),
+                    cwnd=tcp_info.get('cwnd', 0),
+                    ssthresh=tcp_info.get('ssthresh', 0),
+                    rtt=tcp_info.get('rtt', 0.0),
+                    rto=tcp_info.get('rto', 0.0),
+                    bytes_sent=net_stats.bytes_sent,
+                    bytes_received=net_stats.bytes_recv,
+                    packets_sent=net_stats.packets_sent,
+                    packets_received=net_stats.packets_recv,
+                    retransmissions=tcp_info.get('retransmits', 0),
+                    throughput=self._calculate_throughput(net_stats)
+                )
+                db.add(metric)
+                db.commit()
+                
+                # Check for TCP events
+                self._check_tcp_events(tcp_info, db)
+                
+            finally:
+                db.close()
+                
+        except Exception as e:
+            logger.error(f"Error collecting TCP metrics: {e}")
+    
+    def _get_tcp_socket_info(self):
+        \"\"\"Get detailed TCP socket information\"\"\"
+        try:
+            # Use ss command to get detailed TCP statistics
+            result = subprocess.run(['ss', '-i', '-t'], capture_output=True, text=True)
+            if result.returncode == 0:
+                return self._parse_ss_output(result.stdout)
+            else:
+                # Fallback to basic information
+                return self._get_basic_tcp_info()
+        except Exception as e:
+            logger.error(f"Error getting TCP socket info: {e}")
+            return {}
+    
+    def _parse_ss_output(self, ss_output):
+        \"\"\"Parse ss command output for TCP information\"\"\"
+        tcp_info = {}
+        try:
+            lines = ss_output.split('\\n')
+            for line in lines:
+                if 'cwnd:' in line:
+                    # Parse cwnd, ssthresh, rtt, etc.
+                    cwnd_match = re.search(r'cwnd:(\\d+)', line)
+                    if cwnd_match:
+                        tcp_info['cwnd'] = int(cwnd_match.group(1))
+                    
+                    ssthresh_match = re.search(r'ssthresh:(\\d+)', line)
+                    if ssthresh_match:
+                        tcp_info['ssthresh'] = int(ssthresh_match.group(1))
+                    
+                    rtt_match = re.search(r'rtt:([\\d.]+)', line)
+                    if rtt_match:
+                        tcp_info['rtt'] = float(rtt_match.group(1))
+                    
+                    rto_match = re.search(r'rto:(\\d+)', line)
+                    if rto_match:
+                        tcp_info['rto'] = float(rto_match.group(1))
+        except Exception as e:
+            logger.error(f"Error parsing ss output: {e}")
+        
+        return tcp_info
+    
+    def _get_basic_tcp_info(self):
+        \"\"\"Get basic TCP information as fallback\"\"\"
+        try:
+            # Read from /proc/net/tcp for basic information
+            with open('/proc/net/tcp', 'r') as f:
+                lines = f.readlines()
+            
+            # Parse TCP connection information
+            # This is a simplified version - in practice, you'd need more sophisticated parsing
+            return {
+                'cwnd': 10,  # Default congestion window
+                'ssthresh': 65535,  # Default slow start threshold
+                'rtt': 0.0,
+                'rto': 1000.0,
+                'retransmits': 0
+            }
+        except Exception as e:
+            logger.error(f"Error getting basic TCP info: {e}")
+            return {}
+    
+    def _calculate_throughput(self, current_stats):
+        \"\"\"Calculate current throughput\"\"\"
+        try:
+            if hasattr(self, 'last_stats') and self.last_stats:
+                time_diff = time.time() - self.last_stats.get('timestamp', time.time())
+                bytes_diff = current_stats.bytes_sent - self.last_stats.get('bytes_sent', 0)
+                
+                if time_diff > 0:
+                    throughput = bytes_diff / time_diff
+                    self.last_stats = {
+                        'timestamp': time.time(),
+                        'bytes_sent': current_stats.bytes_sent
+                    }
+                    return throughput
+            
+            self.last_stats = {
+                'timestamp': time.time(),
+                'bytes_sent': current_stats.bytes_sent
+            }
+            return 0.0
+        except Exception as e:
+            logger.error(f"Error calculating throughput: {e}")
+            return 0.0
+    
+    def _check_tcp_events(self, tcp_info, db):
+        \"\"\"Check for significant TCP events\"\"\"
+        try:
+            # Get last metric for comparison
+            last_metric = db.query(TCPMetric).filter(
+                TCPMetric.session_id == self.session_id
+            ).order_by(TCPMetric.timestamp.desc()).offset(1).first()
+            
+            if last_metric and tcp_info:
+                # Check for congestion window reduction (potential packet loss)
+                if tcp_info.get('cwnd', 0) < last_metric.cwnd:
+                    event = TCPEvent(
+                        session_id=self.session_id,
+                        timestamp=datetime.utcnow(),
+                        event_type='congestion_window_reduction',
+                        cwnd_before=last_metric.cwnd,
+                        cwnd_after=tcp_info.get('cwnd', 0),
+                        ssthresh_before=last_metric.ssthresh,
+                        ssthresh_after=tcp_info.get('ssthresh', 0),
+                        rtt_ms=tcp_info.get('rtt', 0.0),
+                        description='Congestion window reduced, possible packet loss'
+                    )
+                    db.add(event)
+                
+                # Check for timeout events
+                if tcp_info.get('rto', 0) > last_metric.rto * 2:
+                    event = TCPEvent(
+                        session_id=self.session_id,
+                        timestamp=datetime.utcnow(),
+                        event_type='timeout',
+                        cwnd_before=last_metric.cwnd,
+                        cwnd_after=tcp_info.get('cwnd', 0),
+                        rtt_ms=tcp_info.get('rtt', 0.0),
+                        description='RTO increased significantly, possible timeout'
+                    )
+                    db.add(event)
+                
+                db.commit()
+        except Exception as e:
+            logger.error(f"Error checking TCP events: {e}")
+
+# Global TCP monitor instance
+tcp_monitor = TCPMonitor()
+"""
+
+# ============================================================================
+# File: ftp_server.py
+# ============================================================================
+ftp_server_py = """
+import os
+import threading
+import logging
+from pyftpdlib.authorizers import DummyAuthorizer
+from pyftpdlib.handlers import FTPHandler
+from pyftpdlib.servers import ThreadedFTPServer
+from config import Config
+from tcp_monitor import tcp_monitor
+from models import TransferSession
+from database import SessionLocal
+import uuid
+from datetime import datetime
+
+logger = logging.getLogger(__name__)
+
+class CustomFTPHandler(FTPHandler):
+    \"\"\"Custom FTP handler with TCP monitoring\"\"\"
+    
+    def __init__(self, conn, server, ioloop=None):
+        super().__init__(conn, server, ioloop)
+        self.session_id = None
+        self.transfer_session = None
+    
+    def on_login(self, username):
+        \"\"\"Called when user logs in\"\"\"
+        logger.info(f"FTP login: {username}")
+        super().on_login(username)
+    
+    def on_file_sent(self, file):
+        \"\"\"Called when file transfer (download) completes\"\"\"
+        try:
+            if self.session_id:
+                # Update transfer session
+                db = SessionLocal()
+                try:
+                    session = db.query(TransferSession).filter(
+                        TransferSession.id == self.session_id
+                    ).first()
+                    if session:
+                        session.end_time = datetime.utcnow()
+                        session.success = True
+                        session.total_bytes_transferred = os.path.getsize(file)
+                        db.commit()
+                finally:
+                    db.close()
+                
+                # Stop TCP monitoring
+                tcp_monitor.stop_monitoring()
+                
+            logger.info(f"File sent successfully: {file}")
+            super().on_file_sent(file)
+        except Exception as e:
+            logger.error(f"Error in on_file_sent: {e}")
+    
+    def on_file_received(self, file):
+        \"\"\"Called when file transfer (upload) completes\"\"\"
+        try:
+            if self.session_id:
+                # Update transfer session
+                db = SessionLocal()
+                try:
+                    session = db.query(TransferSession).filter(
+                        TransferSession.id == self.session_id
+                    ).first()
+                    if session:
+                        session.end_time = datetime.utcnow()
+                        session.success = True
+                        session.total_bytes_transferred = os.path.getsize(file)
+                        db.commit()
+                finally:
+                    db.close()
+                
+                # Stop TCP monitoring
+                tcp_monitor.stop_monitoring()
+                
+            logger.info(f"File received successfully: {file}")
+            super().on_file_received(file)
+        except Exception as e:
+            logger.error(f"Error in on_file_received: {e}")
+    
+    def ftp_STOR(self, file):
+        \"\"\"Handle STOR command (upload)\"\"\"
+        try:
+            self._start_transfer_session(file, 'upload')
+            return super().ftp_STOR(file)
+        except Exception as e:
+            logger.error(f"Error in STOR command: {e}")
+            return super().ftp_STOR(file)
+    
+    def ftp_RETR(self, file):
+        \"\"\"Handle RETR command (download)\"\"\"
+        try:
+            self._start_transfer_session(file, 'download')
+            return super().ftp_RETR(file)
+        except Exception as e:
+            logger.error(f"Error in RETR command: {e}")
+            return super().ftp_RETR(file)
+    
+    def _start_transfer_session(self, filename, transfer_type):
+        \"\"\"Start a new transfer session with monitoring\"\"\"
+        try:
+            db = SessionLocal()
+            try:
+                # Create transfer session
+                session = TransferSession(
+                    user_id=self.username or 'anonymous',
+                    session_uuid=str(uuid.uuid4()),
+                    start_time=datetime.utcnow(),
+                    file_name=filename,
+                    file_size=0,  # Will be updated on completion
+                    transfer_type=transfer_type,
+                    tcp_variant='cubic',  # Default, can be configured
+                    network_conditions={}
+                )
+                db.add(session)
+                db.commit()
+                db.refresh(session)
+                
+                self.session_id = session.id
+                
+                # Start TCP monitoring
+                tcp_monitor.start_monitoring(session.id)
+                
+                logger.info(f"Started transfer session {session.id} for {filename}")
+                
+            finally:
+                db.close()
+        except Exception as e:
+            logger.error(f"Error starting transfer session: {e}")
+
+class FTPServer:
+    def __init__(self):
+        self.server = None
+        self.server_thread = None
+        self.running = False
+    
+    def start(self):
+        \"\"\"Start the FTP server\"\"\"
+        try:
+            # Create upload directory if it doesn't exist
+            os.makedirs(Config.UPLOAD_FOLDER, exist_ok=True)
+            
+            # Setup authorizer
+            authorizer = DummyAuthorizer()
+            authorizer.add_user(
+                Config.FTP_USER,
+                Config.FTP_PASSWORD,
+                Config.UPLOAD_FOLDER,
+                perm='elradfmwMT'  # Full permissions
+            )
+            
+            # Anonymous access (optional)
+            # authorizer.add_anonymous(Config.UPLOAD_FOLDER, perm='elr')
+            
+            # Setup handler
+            handler = CustomFTPHandler
+            handler.authorizer = authorizer
+            handler.banner = "TCP Analytics FTP Server Ready"
+            
+            # Customize handler settings
+            handler.max_cons = 256
+            handler.max_cons_per_ip = 5
+            handler.passive_ports = range(60000, 65535)
+            
+            # Create server
+            self.server = ThreadedFTPServer((Config.FTP_HOST, Config.FTP_PORT), handler)
+            
+            # Start server in separate thread
+            self.server_thread = threading.Thread(target=self._run_server)
+            self.server_thread.daemon = True
+            self.server_thread.start()
+            
+            self.running = True
+            logger.info(f"FTP Server started on {Config.FTP_HOST}:{Config.FTP_PORT}")
+            
+        except Exception as e:
+            logger.error(f"Failed to start FTP server: {e}")
+            raise
+    
+    def stop(self):
+        \"\"\"Stop the FTP server\"\"\"
+        if self.server:
+            self.server.close_all()
+            self.running = False
+            logger.info("FTP Server stopped")
+    
+    def _run_server(self):
+        \"\"\"Run the FTP server\"\"\"
+        try:
+            self.server.serve_forever()
+        except Exception as e:
+            logger.error(f"FTP server error: {e}")
+
+# Global FTP server instance
+ftp_server = FTPServer()
+"""
+
+# ============================================================================
+# File: analytics.py
+# ============================================================================
+analytics_py = """
+import pandas as pd
+import plotly.graph_objs as go
+import plotly.express as px
+from plotly.utils import PlotlyJSONEncoder
+import json
+import logging
+from datetime import datetime, timedelta
+from models import TCPMetric, TCPEvent, TransferSession
+from database import SessionLocal
+from sqlalchemy import func
+
+logger = logging.getLogger(__name__)
+
+class TCPAnalytics:
+    def __init__(self):
+        self.db = SessionLocal()
+    
+    def __del__(self):
+        if hasattr(self, 'db'):
+            self.db.close()
+    
+    def get_session_metrics(self, session_id):
+        """Get all TCP metrics for a session"""
+        try:
+            metrics = self.db.query(TCPMetric).filter(
+                TCPMetric.session_id == session_id
+            ).order_by(TCPMetric.timestamp).all()
+            
+            return [{
+                'timestamp': metric.timestamp.isoformat(),
+                'cwnd': metric.cwnd,
+                'ssthresh': metric.ssthresh,
+                'rtt': metric.rtt,
+                'throughput': metric.throughput,
+                'retransmissions': metric.retransmissions
+            } for metric in metrics]
+        except Exception as e:
+            logger.error(f"Error getting session metrics: {e}")
+            return []
+    
+    def get_session_events(self, session_id):
+        """Get all TCP events for a session"""
+        try:
+            events = self.db.query(TCPEvent).filter(
+                TCPEvent.session_id == session_id
+            ).order_by(TCPEvent.timestamp).all()
+            
+            return [{
+                'timestamp': event.timestamp.isoformat(),
+                'event_type': event.event_type,
+                'cwnd_before': event.cwnd_before,
+                'cwnd_after': event.cwnd_after,
+                'description': event.description
+            } for event in events]
+        except Exception as e:
+            logger.error(f"Error getting session events: {e}")
+            return []
+    
+    def generate_cwnd_chart(self, session_id):
+        """Generate congestion window chart"""
+        try:
+            metrics = self.get_session_metrics(session_id)
+            if not metrics:
+                return None
+            
+            df = pd.DataFrame(metrics)
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            
+            fig = go.Figure()
+            
+            # Add cwnd line
+            fig.add_trace(go.Scatter(
+                x=df['timestamp'],
+                y=df['cwnd'],
+                mode='lines',
+                name='Congestion Window',
+                line=dict(color='blue', width=2)
+            ))
+            
+            # Add ssthresh line
+            fig.add_trace(go.Scatter(
+                x=df['timestamp'],
+                y=df['ssthresh'],
+                mode='lines',
+                name='Slow Start Threshold',
+                line=dict(color='red', width=2, dash='dash')
+            ))
+            
+            # Add event markers
+            events = self.get_session_events(session_id)
+            if events:
+                event_df = pd.DataFrame(events)
+                event_df['timestamp'] = pd.to_datetime(event_df['timestamp'])
+                
+                fig.add_trace(go.Scatter(
+                    x=event_df['timestamp'],
+                    y=event_df['cwnd_after'],
+                    mode='markers',
+                    name='TCP Events',
+                    marker=dict(color='orange', size=8, symbol='triangle-up'),
+                    text=event_df['description'],
+                    hovertemplate='<b>%{text}</b><br>Time: %{x}<br>CWND: %{y}<extra></extra>'
+                ))
+            
+            fig.update_layout(
+                title='TCP Congestion Window Evolution',
+                xaxis_title='Time',
+                yaxis_title='Window Size (packets)',
+                hovermode='x unified',
+                showlegend=True,
+                height=400
+            )
+            
+            return json.dumps(fig, cls=PlotlyJSONEncoder)
+        except Exception as e:
+            logger.error(f"Error generating cwnd chart: {e}")
+            return None
+    
+    def generate_throughput_chart(self, session_id):
+        """Generate throughput chart"""
+        try:
+            metrics = self.get_session_metrics(session_id)
+            if not metrics:
+                return None
+            
+            df = pd.DataFrame(metrics)
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            df['throughput_mbps'] = df['throughput'] * 8 / 1024 / 1024  # Convert to Mbps
+            
+            fig = go.Figure()
+            
+            fig.add_trace(go.Scatter(
+                x=df['timestamp'],
+                y=df['throughput_mbps'],
+                mode='lines',
+                name='Throughput',
+                line=dict(color='green', width=2),
+                fill='tozeroy',
+                fillcolor='rgba(0,255,0,0.1)'
+            ))
+            
+            fig.update_layout(
+                title='Network Throughput',
+                xaxis_title='Time',
+                yaxis_title='Throughput (Mbps)',
+                hovermode='x unified',
+                showlegend=True,
+                height=400
+            )
+            
+            return json.dumps(fig, cls=PlotlyJSONEncoder)
+        except Exception as e:
+            logger.error(f"Error generating throughput chart: {e}")
+            return None
+    
+    def generate_rtt_chart(self, session_id):
+        """Generate RTT chart"""
+        try:
+            metrics = self.get_session_metrics(session_id)
+            if not metrics:
+                return None
+            
+            df = pd.DataFrame(metrics)
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            
+            fig = go.Figure()
+            
+            fig.add_trace(go.Scatter(
+                x=df['timestamp'],
+                y=df['rtt'],
+                mode='lines+markers',
+                name='RTT',
+                line=dict(color='purple', width=2),
+                marker=dict(size=4)
+            ))
+            
+            fig.update_layout(
+                title='Round Trip Time (RTT)',
+                xaxis_title='Time',
+                yaxis_title='RTT (ms)',
+                hovermode='x unified',
+                showlegend=True,
+                height=400
+            )
+            
+            return json.dumps(fig, cls=PlotlyJSONEncoder)
+        except Exception as e:
+            logger.error(f"Error generating RTT chart: {e}")
+            return None
+    
+    def generate_summary_stats(self, session_id):
+        """Generate summary statistics"""
+        try:
+            session = self.db.query(TransferSession).filter(
+                TransferSession.id == session_id
+            ).first()
+            
+            if not session:
+                return None
+            
+            metrics = self.get_session_metrics(session_id)
+            events = self.get_session_events(session_id)
+            
+            if not metrics:
+                return None
+            
+            df = pd.DataFrame(metrics)
+            
+            # Calculate duration
+            start_time = pd.to_datetime(df['timestamp'].iloc[0])
+            end_time = pd.to_datetime(df['timestamp'].iloc[-1])
+            duration = (end_time - start_time).total_seconds()
+            
+            # Calculate statistics
+            stats = {
+                'session_id': session_id,
+                'file_name': session.file_name,
+                'transfer_type': session.transfer_type,
+                'duration_seconds': duration,
+                'total_bytes': session.total_bytes_transferred or 0,
+                'avg_throughput_mbps': (df['throughput'].mean() * 8 / 1024 / 1024) if not df['throughput'].isna().all() else 0,
+                'max_cwnd': df['cwnd'].max() if not df['cwnd'].isna().all() else 0,
+                'min_rtt': df['rtt'].min() if not df['rtt'].isna().all() else 0,
+                'avg_rtt': df['rtt'].mean() if not df['rtt'].isna().all() else 0,
+                'max_rtt': df['rtt'].max() if not df['rtt'].isna().all() else 0,
+                'total_retransmissions': df['retransmissions'].sum() if not df['retransmissions'].isna().all() else 0,
+                'tcp_events_count': len(events),
+                'tcp_events': events[:10]  # Show first 10 events
+            }
+            
+            return stats
+        except Exception as e:
+            logger.error(f"Error generating summary stats: {e}")
+            return None
+    
+    def get_recent_sessions(self, limit=10):
+        """Get recent transfer sessions"""
+        try:
+            sessions = self.db.query(TransferSession).order_by(
+                TransferSession.start_time.desc()
+            ).limit(limit).all()
+            
+            return [{
+                'id': session.id,
+                'user_id': session.user_id,
+                'file_name': session.file_name,
+                'transfer_type': session.transfer_type,
+                'start_time': session.start_time.isoformat() if session.start_time else None,
+                'end_time': session.end_time.isoformat() if session.end_time else None,
+                'success': session.success,
+                'file_size': session.file_size,
+                'total_bytes_transferred': session.total_bytes_transferred
+            } for session in sessions]
+        except Exception as e:
+            logger.error(f"Error getting recent sessions: {e}")
+            return []
+    
+    def get_live_metrics(self, session_id, last_timestamp=None):
+        """Get live metrics for real-time updates"""
+        try:
+            query = self.db.query(TCPMetric).filter(
+                TCPMetric.session_id == session_id
+            )
+            
+            if last_timestamp:
+                query = query.filter(TCPMetric.timestamp > last_timestamp)
+            
+            metrics = query.order_by(TCPMetric.timestamp.desc()).limit(50).all()
+            
+            return [{
+                'timestamp': metric.timestamp.isoformat(),
+                'cwnd': metric.cwnd,
+                'ssthresh': metric.ssthresh,
+                'rtt': metric.rtt,
+                'throughput': metric.throughput,
+                'retransmissions': metric.retransmissions
+            } for metric in reversed(metrics)]
+        except Exception as e:
+            logger.error(f"Error getting live metrics: {e}")
+            return []
+
+# Global analytics instance
+analytics = TCPAnalytics()
+
+# ============================================================================
+# File: network_simulator.py
+# ============================================================================
+network_simulator_py = """
+import subprocess
+import logging
+import json
+from config import Config
+from models import NetworkCondition
+from database import SessionLocal
+
+logger = logging.getLogger(__name__)
+
+class NetworkSimulator:
+    def __init__(self):
+        self.active_conditions = None
+        self.interface = Config.TCP_MONITOR_INTERFACE
+        
+    def apply_conditions(self, conditions):
+        \"\"\"Apply network conditions using tc (traffic control)\"\"\"
+        if not Config.TC_ENABLED:
+            logger.warning("Traffic control is disabled")
+            return False
+            
+        try:
+            # Clear existing rules
+            self.clear_conditions()
+            
+            # Build tc command
+            cmd = ['tc', 'qdisc', 'add', 'dev', self.interface, 'root', 'handle', '1:', 'netem']
+            
+            # Add latency
+            if conditions.get('latency_ms', 0) > 0:
+                cmd.extend(['delay', f"{conditions['latency_ms']}ms"])
+            
+            # Add jitter
+            if conditions.get('jitter_ms', 0) > 0:
+                cmd.extend([f"{conditions['jitter_ms']}ms"])
+            
+            # Add packet loss
+            if conditions.get('packet_loss_percent', 0) > 0:
+                cmd.extend(['loss', f"{conditions['packet_loss_percent']}%"])
+            
+            # Execute command
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode == 0:
+                self.active_conditions = conditions
+                logger.info(f"Applied network conditions: {conditions}")
+                
+                # Apply bandwidth limit if specified
+                if conditions.get('bandwidth_mbps', 0) > 0:
+                    self._apply_bandwidth_limit(conditions['bandwidth_mbps'])
+                
+                return True
+            else:
+                logger.error(f"Failed to apply network conditions: {result.stderr}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error applying network conditions: {e}")
+            return False
+    
+    def _apply_bandwidth_limit(self, bandwidth_mbps):
+        \"\"\"Apply bandwidth limitation\"\"\"
+        try:
+            # Convert Mbps to bits per second
+            bandwidth_bps = bandwidth_mbps * 1000000
+            
+            # Add TBF (Token Bucket Filter) for bandwidth control
+            cmd = [
+                'tc', 'qdisc', 'add', 'dev', self.interface, 
+                'parent', '1:1', 'handle', '10:', 'tbf',
+                'rate', f'{bandwidth_bps}bit',
+                'burst', '32kbit',
+                'latency', '400ms'
+            ]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode == 0:
+                logger.info(f"Applied bandwidth limit: {bandwidth_mbps} Mbps")
+            else:
+                logger.error(f"Failed to apply bandwidth limit: {result.stderr}")
+                
+        except Exception as e:
+            logger.error(f"Error applying bandwidth limit: {e}")
+    
+    def clear_conditions(self):
+        \"\"\"Clear all network conditions\"\"\"
+        if not Config.TC_ENABLED:
+            return True
+            
+        try:
+            # Remove all tc rules
+            cmd = ['tc', 'qdisc', 'del', 'dev', self.interface, 'root']
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            
+            self.active_conditions = None
+            logger.info("Cleared network conditions")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error clearing network conditions: {e}")
+            return False
+    
+    def get_active_conditions(self):
+        \"\"\"Get currently active network conditions\"\"\"
+        return self.active_conditions
+    
+    def get_preset_conditions(self):
+        \"\"\"Get preset network conditions\"\"\"
+        try:
+            db = SessionLocal()
+            conditions = db.query(NetworkCondition).filter(
+                NetworkCondition.is_preset == True
+            ).all()
+            db.close()
+            
+            return [{
+                'id': condition.id,
+                'name': condition.name,
+                'description': condition.description,
+                'latency_ms': condition.latency_ms,
+                'packet_loss_percent': condition.packet_loss_percent,
+                'bandwidth_mbps': condition.bandwidth_mbps,
+                'jitter_ms': condition.jitter_ms
+            } for condition in conditions]
+        except Exception as e:
+            logger.error(f"Error getting preset conditions: {e}")
+            return []
+    
+    def create_preset_conditions(self):
+        \"\"\"Create default preset network conditions\"\"\"
+        try:
+            db = SessionLocal()
+            
+            presets = [
+                {
+                    'name': 'Ideal',
+                    'description': 'Perfect network conditions',
+                    'latency_ms': 0,
+                    'packet_loss_percent': 0.0,
+                    'bandwidth_mbps': 1000,
+                    'jitter_ms': 0
+                },
+                {
+                    'name': 'WiFi',
+                    'description': 'Typical WiFi conditions',
+                    'latency_ms': 5,
+                    'packet_loss_percent': 0.1,
+                    'bandwidth_mbps': 100,
+                    'jitter_ms': 2
+                },
+                {
+                    'name': '4G Mobile',
+                    'description': '4G mobile network',
+                    'latency_ms': 50,
+                    'packet_loss_percent': 0.5,
+                    'bandwidth_mbps': 20,
+                    'jitter_ms': 10
+                },
+                {
+                    'name': '3G Mobile',
+                    'description': '3G mobile network',
+                    'latency_ms': 150,
+                    'packet_loss_percent': 1.0,
+                    'bandwidth_mbps': 2,
+                    'jitter_ms': 20
+                },
+                {
+                    'name': 'Satellite',
+                    'description': 'Satellite internet connection',
+                    'latency_ms': 600,
+                    'packet_loss_percent': 0.2,
+                    'bandwidth_mbps': 10,
+                    'jitter_ms': 50
+                },
+                {
+                    'name': 'Congested',
+                    'description': 'Heavily congested network',
+                    'latency_ms': 100,
+                    'packet_loss_percent': 3.0,
+                    'bandwidth_mbps': 5,
+                    'jitter_ms': 30
+                }
+            ]
+            
+            for preset in presets:
+                existing = db.query(NetworkCondition).filter(
+                    NetworkCondition.name == preset['name']
+                ).first()
+                
+                if not existing:
+                    condition = NetworkCondition(
+                        name=preset['name'],
+                        description=preset['description'],
+                        latency_ms=preset['latency_ms'],
+                        packet_loss_percent=preset['packet_loss_percent'],
+                        bandwidth_mbps=preset['bandwidth_mbps'],
+                        jitter_ms=preset['jitter_ms'],
+                        is_preset=True,
+                        created_by='system'
+                    )
+                    db.add(condition)
+            
+            db.commit()
+            db.close()
+            logger.info("Created preset network conditions")
+            
+        except Exception as e:
+            logger.error(f"Error creating preset conditions: {e}")
+
+# Global network simulator instance
+network_simulator = NetworkSimulator()
+
+# ============================================================================
+# File: websocket_handler.py
+# ============================================================================
+websocket_handler_py = """
+from flask_socketio import SocketIO, emit, join_room, leave_room
+import logging
+import threading
+import time
+from analytics import analytics
+from tcp_monitor import tcp_monitor
+
+logger = logging.getLogger(__name__)
+
+class WebSocketHandler:
+    def __init__(self, socketio):
+        self.socketio = socketio
+        self.active_sessions = {}
+        self.update_thread = None
+        self.running = False
+        
+    def start_updates(self):
+        \"\"\"Start the update thread for real-time data\"\"\"
+        if not self.running:
+            self.running = True
+            self.update_thread = threading.Thread(target=self._update_loop)
+            self.update_thread.daemon = True
+            self.update_thread.start()
+            logger.info("WebSocket update thread started")
+    
+    def stop_updates(self):
+        \"\"\"Stop the update thread\"\"\"
+        self.running = False
+        if self.update_thread:
+            self.update_thread.join()
+        logger.info("WebSocket update thread stopped")
+    
+    def _update_loop(self):
+        \"\"\"Main update loop for real-time data\"\"\"
+        while self.running:
+            try:
+                for session_id, clients in self.active_sessions.items():
+                    if clients:
+                        # Get latest metrics
+                        metrics = analytics.get_live_metrics(session_id)
+                        if metrics:
+                            # Emit to all clients monitoring this session
+                            self.socketio.emit('live_metrics', {
+                                'session_id': session_id,
+                                'metrics': metrics[-10:]  # Send last 10 points
+                            }, room=f'session_{session_id}')
+                
+                time.sleep(0.5)  # Update every 500ms
+            except Exception as e:
+                logger.error(f"Error in WebSocket update loop: {e}")
+    
+    def join_session(self, session_id, client_id):
+        \"\"\"Add client to session monitoring\"\"\"
+        room = f'session_{session_id}'
+        join_room(room)
+        
+        if session_id not in self.active_sessions:
+            self.active_sessions[session_id] = set()
+        self.active_sessions[session_id].add(client_id)
+        
+        logger.info(f"Client {client_id} joined session {session_id}")
+        
+        # Send initial data
+        self._send_initial_data(session_id, room)
+    
+    def leave_session(self, session_id, client_id):
+        \"\"\"Remove client from session monitoring\"\"\"
+        room = f'session_{session_id}'
+        leave_room(room)
+        
+        if session_id in self.active_sessions:
+            self.active_sessions[session_id].discard(client_id)
+            if not self.active_sessions[session_id]:
+                del self.active_sessions[session_id]
+        
+        logger.info(f"Client {client_id} left session {session_id}")
+    
+    def _send_initial_data(self, session_id, room):
+        \"\"\"Send initial data when client joins\"\"\"
+        try:
+            # Send current charts
+            cwnd_chart = analytics.generate_cwnd_chart(session_id)
+            throughput_chart = analytics.generate_throughput_chart(session_id)
+            rtt_chart = analytics.generate_rtt_chart(session_id)
+            
+            self.socketio.emit('initial_charts', {
+                'session_id': session_id,
+                'cwnd_chart': cwnd_chart,
+                'throughput_chart': throughput_chart,
+                'rtt_chart': rtt_chart
+            }, room=room)
+            
+            # Send summary stats
+            stats = analytics.generate_summary_stats(session_id)
+            if stats:
+                self.socketio.emit('session_stats', {
+                    'session_id': session_id,
+                    'stats': stats
+                }, room=room)
+                
+        except Exception as e:
+            logger.error(f"Error sending initial data: {e}")
+
+# WebSocket event handlers
+def init_websocket_handlers(socketio):
+    ws_handler = WebSocketHandler(socketio)
+    ws_handler.start_updates()
+    
+    @socketio.on('connect')
+    def handle_connect():
+        logger.info(f"Client connected: {request.sid}")
+        emit('connected', {'status': 'success'})
+    
+    @socketio.on('disconnect')
+    def handle_disconnect():
+        logger.info(f"Client disconnected: {request.sid}")
+    
+    @socketio.on('join_session')
+    def handle_join_session(data):
+        session_id = data.get('session_id')
+        if session_id:
+            ws_handler.join_session(session_id, request.sid)
+            emit('joined_session', {'session_id': session_id})
+    
+    @socketio.on('leave_session')
+    def handle_leave_session(data):
+        session_id = data.get('session_id')
+        if session_id:
+            ws_handler.leave_session(session_id, request.sid)
+            emit('left_session', {'session_id': session_id})
+    
+    @socketio.on('request_update')
+    def handle_request_update(data):
+        session_id = data.get('session_id')
+        if session_id:
+            # Force update for specific session
+            metrics = analytics.get_live_metrics(session_id)
+            emit('live_metrics', {
+                'session_id': session_id,
+                'metrics': metrics[-10:]
+            })
+    
+    return ws_handler
+
+# ============================================================================
+# File: utils.py
+# ============================================================================
+utils_py = """
+import os
+import uuid
+import hashlib
+import mimetypes
+import logging
+from datetime import datetime
+from werkzeug.utils import secure_filename
+
+logger = logging.getLogger(__name__)
+
+def allowed_file(filename, allowed_extensions=None):
+    \"\"\"Check if file extension is allowed\"\"\"
+    if allowed_extensions is None:
+        # Allow common file types
+        allowed_extensions = {
+            'txt', 'pdf', 'png', 'jpg', 'jpeg', 'gif', 'doc', 'docx',
+            'xls', 'xlsx', 'ppt', 'pptx', 'zip', 'rar', 'tar', 'gz'
+        }
+    
+    return '.' in filename and \
+           filename.rsplit('.', 1)[1].lower() in allowed_extensions
+
+def generate_unique_filename(filename):
+    \"\"\"Generate unique filename to avoid conflicts\"\"\"
+    name, ext = os.path.splitext(secure_filename(filename))
+    unique_id = uuid.uuid4().hex[:8]
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return f"{name}_{timestamp}_{unique_id}{ext}"
+
+def calculate_file_hash(filepath):
+    \"\"\"Calculate MD5 hash of file\"\"\"
+    try:
+        hash_md5 = hashlib.md5()
+        with open(filepath, "rb") as f:
+            for chunk in iter(lambda: f.read(4096), b""):
+                hash_md5.update(chunk)
+        return hash_md5.hexdigest()
+    except Exception as e:
+        logger.error(f"Error calculating file hash: {e}")
+        return None
+
+def format_bytes(bytes_count):
+    \"\"\"Format bytes to human readable format\"\"\"
+    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+        if bytes_count < 1024.0:
+            return f"{bytes_count:.1f} {unit}"
+        bytes_count /= 1024.0
+    return f"{bytes_count:.1f} PB"
+
+def format_duration(seconds):
+    \"\"\"Format duration in seconds to human readable format\"\"\"
+    if seconds < 60:
+        return f"{seconds:.1f} seconds"
+    elif seconds < 3600:
+        minutes = seconds // 60
+        secs = seconds % 60
+        return f"{int(minutes)}m {int(secs)}s"
+    else:
+        hours = seconds // 3600
+        minutes = (seconds % 3600) // 60
+        return f"{int(hours)}h {int(minutes)}m"
+
+def get_mime_type(filename):
+    \"\"\"Get MIME type of file\"\"\"
+    mime_type, _ = mimetypes.guess_type(filename)
+    return mime_type or 'application/octet-stream'
+
+def ensure_directory(directory):
+    \"\"\"Ensure directory exists\"\"\"
+    try:
+        os.makedirs(directory, exist_ok=True)
+        return True
+    except Exception as e:
+        logger.error(f"Error creating directory {directory}: {e}")
+        return False
+
+def validate_network_conditions(conditions):
+    \"\"\"Validate network condition parameters\"\"\"
+    try:
+        latency = int(conditions.get('latency_ms', 0))
+        packet_loss = float(conditions.get('packet_loss_percent', 0))
+        bandwidth = int(conditions.get('bandwidth_mbps', 100))
+        jitter = int(conditions.get('jitter_ms', 0))
+        
+        # Validate ranges
+        if not (0 <= latency <= 2000):
+            return False, "Latency must be between 0-2000ms"
+        if not (0 <= packet_loss <= 100):
+            return False, "Packet loss must be between 0-100%"
+        if not (1 <= bandwidth <= 10000):
+            return False, "Bandwidth must be between 1-10000 Mbps"
+        if not (0 <= jitter <= 1000):
+            return False, "Jitter must be between 0-1000ms"
+        
+        return True, "Valid"
+    except (ValueError, TypeError):
+        return False, "Invalid parameter types"
+
+class FileManager:
+    \"\"\"File management utility class\"\"\"
+    
+    def __init__(self, upload_folder):
+        self.upload_folder = upload_folder
+        ensure_directory(upload_folder)
+    
+    def save_file(self, file, filename=None):
+        \"\"\"Save uploaded file\"\"\"
+        try:
+            if filename is None:
+                filename = generate_unique_filename(file.filename)
+            
+            filepath = os.path.join(self.upload_folder, filename)
+            file.save(filepath)
+            
+            return {
+                'success': True,
+                'filename': filename,
+                'filepath': filepath,
+                'size': os.path.getsize(filepath),
+                'hash': calculate_file_hash(filepath)
+            }
+        except Exception as e:
+            logger.error(f"Error saving file: {e}")
+            return {'success': False, 'error': str(e)}
+    
+    def list_files(self):
+        \"\"\"List all files in upload folder\"\"\"
+        try:
+            files = []
+            for filename in os.listdir(self.upload_folder):
+                filepath = os.path.join(self.upload_folder, filename)
+                if os.path.isfile(filepath):
+                    stat = os.stat(filepath)
+                    files.append({
+                        'name': filename,
+                        'size': stat.st_size,
+                        'modified': datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                        'mime_type': get_mime_type(filename)
+                    })
+            return files
+        except Exception as e:
+            logger.error(f"Error listing files: {e}")
+            return []
+    
+    def delete_file(self, filename):
+        \"\"\"Delete file\"\"\"
+        try:
+            filepath = os.path.join(self.upload_folder, filename)
+            if os.path.exists(filepath):
+                os.remove(filepath)
+                return True
+            return False
+        except Exception as e:
+            logger.error(f"Error deleting file: {e}")
+            return False
