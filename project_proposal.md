@@ -1,3 +1,27 @@
+
+
+## 📊 Real-Time TCP Analysis
+
+### 1️⃣ **Congestion Control:**
+**Graph: Transmission Round vs cwnd**
+- Tracks how TCP congestion window (`cwnd`) evolves during file transfer
+- Shows slow start, congestion avoidance, and recovery behavior
+
+### 2️⃣ **Flow Control:**
+**Graph: Time vs cwnd**
+- Shows how TCP regulates data flow based on network conditions
+
+### 3️⃣ **Statistical Summary:**
+**Metrics Box (per transfer):**
+- ✅ File size
+- ✅ Transfer duration
+- ✅ Average throughput
+- ✅ Min/Avg/Max RTT
+- ✅ Retransmission count
+- ✅ Packet loss rate
+
+
+
 Perfect! Let's keep it practical and useful. Here's a focused, straightforward approach:
 
 ## Simple but Valuable TCP Monitor Features
